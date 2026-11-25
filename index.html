@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Driftless Plat Map</title>
+<meta name="description" content="Wisconsin property lines, owners and public land from free state data.">
+<meta name="theme-color" content="#1d2420">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: full-bleed map, floating field controls top-right, bottom sheet for the tapped parcel. */
+:root{
+  --bg:#f3f4ef;           /* panel ground, light */
+  --panel:rgba(250,250,246,.94);
+  --fg:#1f2620;
+  --muted:#5d675e;
+  --line:rgba(31,38,32,.14);
+  --accent:#d9480f;       /* blaze orange */
+  --accent-fg:#ffffff;
+  --ok:#2b8a3e;
+  --warn:#a35a00;
+  --parcel-sat:#ffd60a;   /* property lines over imagery */
+  --parcel-topo:#c2255c;  /* property lines over topo */
+  --hl:#00e5ff;           /* selected parcel */
+  --you:#1c7ed6;
+  --shadow:0 2px 10px rgba(0,0,0,.22);
+  --f-display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --f-body:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#171c18;--panel:rgba(26,32,28,.94);--fg:#e9ede6;--muted:#a3ada2;--line:rgba(233,237,230,.14);
+  --accent:#ff7a33;--accent-fg:#1a0e06;--ok:#69db7c;--warn:#ffc078;--shadow:0 2px 12px rgba(0,0,0,.5);color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#171c18;--panel:rgba(26,32,28,.94);--fg:#e9ede6;--muted:#a3ada2;--line:rgba(233,237,230,.14);
+  --accent:#ff7a33;--accent-fg:#1a0e06;--ok:#69db7c;--warn:#ffc078;--shadow:0 2px 12px rgba(0,0,0,.5);color-scheme:dark}
+
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--f-body);-webkit-text-size-adjust:100%;overflow:hidden}
+#map{position:fixed;inset:0;background:#2a2f2b}
+.leaflet-container{font:inherit}
+.leaflet-bottom{bottom:env(safe-area-inset-bottom,0px)}
+.leaflet-left{left:env(safe-area-inset-left,0px)}
+.leaflet-right{right:env(safe-area-inset-right,0px)}
+.leaflet-control-attribution{font-size:10px;max-width:70vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* top bar */
+.top{position:fixed;z-index:1000;top:calc(env(safe-area-inset-top,0px) + 10px);
+  left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));
+  display:flex;gap:8px;align-items:flex-start;pointer-events:none}
+.brand{pointer-events:auto;background:var(--panel);box-shadow:var(--shadow);border-radius:10px;padding:6px 12px 7px;
+  display:flex;flex-direction:column;min-width:0}
+.brand b{font:700 18px/1 var(--f-display);letter-spacing:.04em;text-transform:uppercase}
+.brand span{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spacer{flex:1}
+.tools{pointer-events:auto;display:flex;flex-direction:column;gap:8px}
+.btn{appearance:none;border:0;background:var(--panel);color:var(--fg);box-shadow:var(--shadow);border-radius:10px;
+  width:46px;height:46px;display:grid;place-items:center;cursor:pointer;padding:0}
+.btn svg{width:24px;height:24px}
+.btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.btn:focus-visible,.chip:focus-visible,.seg button:focus-visible,.act:focus-visible{outline:3px solid var(--hl);outline-offset:2px}
+
+/* status chip */
+.status{position:fixed;z-index:999;left:50%;transform:translateX(-50%);
+  top:calc(env(safe-area-inset-top,0px) + 66px);background:var(--panel);box-shadow:var(--shadow);border-radius:999px;
+  padding:6px 14px;font-weight:500;font-size:13px;max-width:calc(100vw - 150px);text-align:center}
+.status.err{color:var(--warn)}
+.spin{display:inline-block;width:10px;height:10px;border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;
+  margin-right:6px;vertical-align:-1px;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* layers panel */
+.panel{position:fixed;z-index:1001;top:calc(env(safe-area-inset-top,0px) + 10px);right:max(66px,calc(env(safe-area-inset-right,0px) + 66px));
+  width:min(260px,calc(100vw - 92px));background:var(--panel);box-shadow:var(--shadow);border-radius:12px;padding:12px;
+  display:flex;flex-direction:column;gap:12px}
+.panel h2{margin:0;font:700 13px/1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--line);padding:3px;border-radius:9px}
+.seg button{appearance:none;border:0;border-radius:7px;padding:8px 6px;font:600 14px var(--f-body);background:transparent;color:var(--fg);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--bg);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.tog{display:flex;align-items:center;gap:10px;font-weight:500;cursor:pointer}
+.tog input{width:20px;height:20px;accent-color:var(--accent);margin:0}
+.sw{width:18px;height:4px;border-radius:2px;flex:none}
+.note{font-size:12px;color:var(--muted);line-height:1.35}
+
+/* bottom sheet */
+.sheet{position:fixed;z-index:1002;left:0;right:0;bottom:0;background:var(--panel);box-shadow:0 -4px 18px rgba(0,0,0,.25);
+  border-radius:16px 16px 0 0;max-height:62vh;overflow:auto;-webkit-overflow-scrolling:touch;
+  padding:8px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 14px) max(16px,env(safe-area-inset-left,0px))}
+@media (min-width:720px){.sheet{left:auto;right:16px;bottom:16px;width:380px;border-radius:14px;max-height:calc(100vh - 120px)}}
+.grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 10px}
+.sh-head{display:flex;gap:10px;align-items:flex-start}
+.owner{flex:1;min-width:0}
+.eyebrow{font:700 12px/1 var(--f-display);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.owner h3{margin:0;font:700 24px/1.08 var(--f-display);letter-spacing:.01em;text-wrap:balance;overflow-wrap:anywhere}
+.owner .o2{font-size:14px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.x{appearance:none;border:0;background:var(--line);color:var(--fg);width:34px;height:34px;border-radius:50%;cursor:pointer;flex:none;font-size:18px;line-height:1}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}
+.stat{border:1px solid var(--line);border-radius:10px;padding:7px 9px;min-width:0}
+.stat b{display:block;font:700 20px/1.1 var(--f-display);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.pub{border-radius:10px;padding:8px 10px;margin-bottom:10px;background:color-mix(in srgb,var(--ok) 16%,transparent);border:1px solid color-mix(in srgb,var(--ok) 45%,transparent);font-weight:500}
+.pub small{display:block;font-weight:400;color:var(--muted)}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px}
+dt{color:var(--muted);font-size:13px;white-space:nowrap}
+dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.act{appearance:none;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:9px;padding:9px 12px;
+  font:600 14px var(--f-body);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.act.primary{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+.fine{font-size:11px;color:var(--muted);margin-top:12px;line-height:1.35}
+
+.toast{position:fixed;z-index:1003;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 24px);
+  background:var(--fg);color:var(--bg);padding:9px 14px;border-radius:9px;font-weight:500;font-size:14px;max-width:calc(100vw - 32px);box-shadow:var(--shadow)}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="Map of Wisconsin parcels"></div>
+
+<div class="top">
+  <div class="brand"><b>Driftless Plat Map</b><span id="sub">Tap a parcel for owner and acres</span></div>
+  <div class="spacer"></div>
+  <div class="tools">
+    <button class="btn" id="bLayers" aria-pressed="false" aria-label="Map layers" title="Map layers">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>
+    </button>
+    <button class="btn" id="bLocate" aria-pressed="false" aria-label="Show my location" title="Show my location">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="status" id="status" hidden></div>
+
+<div class="panel" id="panel" hidden>
+  <h2>Base map</h2>
+  <div class="seg" role="group" aria-label="Base map">
+    <button id="bmSat" aria-pressed="true">Satellite</button>
+    <button id="bmTopo" aria-pressed="false">Topo</button>
+  </div>
+  <h2>Overlays</h2>
+  <label class="tog"><input type="checkbox" id="tParcels" checked><span class="sw" id="swParcel"></span>Property lines</label>
+  <label class="tog"><input type="checkbox" id="tPublic" checked><span class="sw" style="background:#4caf50"></span>Public land</label>
+  <p class="note" id="dataNote">Property lines: Wisconsin Statewide Parcel Map (V12, collected Jan to May 2026, mostly 2025 tax roll). Public land: Wisconsin DNR. Imagery and topo: USGS National Map.</p>
+</div>
+
+<section class="sheet" id="sheet" hidden aria-live="polite"></section>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+// Official free services (no keys). Parcels: SCO / WLIP statewide layer. Public land: WI DNR. Basemaps: USGS.
+var PARCELS = "https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query";
+var DNR_MGD = "https://dnrmaps.wi.gov/arcgis/rest/services/LF_DML/LF_DNR_Managed_Lands_Dissolved_WTM_Ext/MapServer";
+var DNR_PUB = "https://dnrmaps.wi.gov/arcgis/rest/services/LF_DML/LF_DNR_PUBLIC_LAND_WTM_Ext/MapServer";
+var USGS = "https://basemap.nationalmap.gov/arcgis/rest/services/";
+var MIN_PARCEL_ZOOM = 15;
+var PAGE = 2000, MAX_PAGES = 4;
+
+var $ = function(id){return document.getElementById(id);};
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+function store(k,v){try{ if(v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v);}catch(e){return null;}}
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+
+// ---------- map ----------
+var start = {lat:43.55,lng:-90.88,z:11}; // Vernon County, Driftless
+try{ var sv = JSON.parse(store("pm.view")||"null"); if(sv && sv.z) start = sv; }catch(e){}
+var map = L.map("map",{zoomControl:false,preferCanvas:true,maxZoom:19,minZoom:6,
+  maxBounds:[[42.0,-93.6],[47.6,-86.0]],maxBoundsViscosity:0.7}).setView([start.lat,start.lng],start.z);
+L.control.zoom({position:"bottomleft"}).addTo(map);
+L.control.scale({imperial:true,metric:false,position:"bottomleft"}).addTo(map);
+map.attributionControl.setPrefix(false);
+
+var bases = {
+  sat: L.tileLayer(USGS+"USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",{maxNativeZoom:16,maxZoom:19,attribution:"USGS National Map"}),
+  topo: L.tileLayer(USGS+"USGSTopo/MapServer/tile/{z}/{y}/{x}",{maxNativeZoom:16,maxZoom:19,attribution:"USGS National Map"})
+};
+var baseKey = store("pm.base")==="topo" ? "topo" : "sat";
+bases[baseKey].addTo(map);
+
+// ---------- public land (server-drawn images) ----------
+map.createPane("public"); map.getPane("public").style.zIndex = 350;
+var pubOn = store("pm.pub")!=="0";
+var pubLayers = {mgd:null, pub:null}, pubSeq = 0;
+function exportUrl(base){
+  var b = map.getBounds(), s = map.getSize(), r = Math.min(window.devicePixelRatio||1,2);
+  var sw = L.CRS.EPSG3857.project(b.getSouthWest()), ne = L.CRS.EPSG3857.project(b.getNorthEast());
+  var w = Math.min(Math.round(s.x*r),4096), h = Math.min(Math.round(s.y*r),4096);
+  return base+"/export?bbox="+[sw.x,sw.y,ne.x,ne.y].map(function(n){return n.toFixed(1);}).join(",")+
+    "&bboxSR=3857&imageSR=3857&size="+w+","+h+"&dpi="+Math.round(96*r)+"&format=png32&transparent=true&f=image";
+}
+function drawPublic(){
+  if(!pubOn) return;
+  var seq = ++pubSeq, b = map.getBounds();
+  ["mgd","pub"].forEach(function(k){
+    var url = exportUrl(k==="mgd"?DNR_MGD:DNR_PUB);
+    var ov = L.imageOverlay(url,b,{pane:"public",opacity:.5,interactive:false,attribution:"WI DNR"});
+    ov.once("load",function(){ if(seq!==pubSeq){map.removeLayer(ov);return;} if(pubLayers[k]) map.removeLayer(pubLayers[k]); pubLayers[k]=ov; });
+    ov.once("error",function(){ map.removeLayer(ov); });
+    ov.addTo(map);
+  });
+}
+function clearPublic(){ pubSeq++; ["mgd","pub"].forEach(function(k){ if(pubLayers[k]){map.removeLayer(pubLayers[k]);pubLayers[k]=null;} }); }
+
+// ---------- parcels (vector lines from the statewide layer) ----------
+var parcelsOn = store("pm.parcels")!=="0";
+var renderer = L.canvas({padding:.3});
+var loaded = new Map();
+var parcelGroup = L.layerGroup().addTo(map);
+var ctrl = null, timer = null;
+function parcelStyle(){ return {renderer:renderer,color:css(baseKey==="sat"?"--parcel-sat":"--parcel-topo"),weight:baseKey==="sat"?1.8:1.4,opacity:.95,fill:false,interactive:false}; }
+function restyle(){ var st = parcelStyle(); loaded.forEach(function(l){ l.setStyle(st); }); $("swParcel").style.background = st.color; }
+
+function setStatus(html,isErr){ var el=$("status"); if(!html){el.hidden=true;return;} el.innerHTML=html; el.classList.toggle("err",!!isErr); el.hidden=false; }
+
+function bboxParam(b){ return [b.getWest(),b.getSouth(),b.getEast(),b.getNorth()].map(function(n){return n.toFixed(6);}).join(","); }
+
+function loadParcels(){
+  if(!parcelsOn){ setStatus(""); return; }
+  if(map.getZoom() < MIN_PARCEL_ZOOM){ setStatus("Zoom in to see property lines"); return; }
+  if(ctrl) ctrl.abort();
+  ctrl = new AbortController(); var my = ctrl;
+  var b = map.getBounds().pad(0.15);
+  setStatus('<span class="spin"></span>Loading property lines');
+  var page = 0, capped = false;
+  function next(){
+    var q = "?geometry="+bboxParam(b)+"&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326"+
+      "&spatialRel=esriSpatialRelIntersects&outFields=OBJECTID&returnGeometry=true"+
+      "&maxAllowableOffset=0.000008&geometryPrecision=6&orderByFields=OBJECTID"+
+      "&resultOffset="+(page*PAGE)+"&resultRecordCount="+PAGE+"&f=geojson";
+    return fetch(PARCELS+q,{signal:my.signal}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(function(gj){
+        if(gj.error) throw new Error(gj.error.message||"service error");
+        var st = parcelStyle();
+        (gj.features||[]).forEach(function(f){
+          var id = f.id!=null ? f.id : (f.properties&&f.properties.OBJECTID);
+          if(loaded.has(id)) return;
+          var lyr = L.geoJSON(f,{style:function(){return st;}});
+          lyr.addTo(parcelGroup); loaded.set(id,lyr);
+        });
+        var more = (gj.properties && gj.properties.exceededTransferLimit) || (gj.features && gj.features.length===PAGE);
+        page++;
+        if(more && page<MAX_PAGES) return next();
+        capped = !!more;
+      });
+  }
+  next().then(function(){
+    if(my!==ctrl) return;
+    if(loaded.size > 20000){ trimFar(); }
+    setStatus(capped ? "Zoom in further to load every line here" : "");
+  }).catch(function(e){
+    if(e.name==="AbortError") return;
+    setStatus("Couldn't reach the state parcel service. Check signal and pan to retry.",true);
+  });
+}
+function trimFar(){
+  var keep = map.getBounds().pad(1);
+  loaded.forEach(function(l,id){ if(!keep.intersects(l.getBounds())){ parcelGroup.removeLayer(l); loaded.delete(id);} });
+}
+
+// ---------- tap a parcel ----------
+var hl = L.geoJSON(null,{style:function(){return {color:css("--hl"),weight:3.5,fillColor:css("--hl"),fillOpacity:.12,interactive:false};}}).addTo(map);
+var tapPin = null, tapSeq = 0;
+var CLASS = {"1":"Residential","2":"Commercial","3":"Manufacturing","4":"Agricultural","5":"Undeveloped","5M":"Agricultural forest",
+  "6":"Productive forest","7":"Other","X1":"Exempt, federal","X2":"Exempt, state","X3":"Exempt, county","X4":"Exempt, other"};
+function classText(v){
+  if(!v) return "";
+  return String(v).split(/[,;]/).map(function(c){ c=c.trim().toUpperCase(); if(/^W\d/.test(c)) return "Managed Forest / Forest Crop ("+c+")"; return CLASS[c]?CLASS[c]:c; }).filter(Boolean).join(", ");
+}
+function num(v,d){ return (v==null||v===""||isNaN(v)) ? null : Number(v).toLocaleString("en-US",{maximumFractionDigits:d==null?0:d,minimumFractionDigits:d||0}); }
+function money(v){ var n = num(v); return n==null||Number(v)===0 ? null : "$"+n; }
+function hiddenOwner(s){ return !s || /^(not available|n\/a|none|redacted|unknown|private)/i.test(String(s).trim()); }
+
+function identify(base,ll){
+  var b = map.getBounds(), s = map.getSize();
+  var q = "?geometry="+ll.lng.toFixed(6)+","+ll.lat.toFixed(6)+"&geometryType=esriGeometryPoint&sr=4326&layers=all&tolerance=1"+
+    "&mapExtent="+bboxParam(b)+"&imageDisplay="+s.x+","+s.y+",96&returnGeometry=false&f=json";
+  return fetch(base+"/identify"+q).then(function(r){return r.json();}).then(function(j){return j.results||[];}).catch(function(){return [];});
+}
+
+map.on("click",function(e){
+  var ll = e.latlng, seq = ++tapSeq;
+  if(tapPin) map.removeLayer(tapPin);
+  tapPin = L.circleMarker(ll,{radius:5,color:"#fff",weight:2,fillColor:css("--accent"),fillOpacity:1,interactive:false}).addTo(map);
+  openSheet('<div class="grab"></div><div class="eyebrow"><span class="spin"></span>Looking up this spot</div>');
+  var q = "?geometry="+ll.lng.toFixed(6)+","+ll.lat.toFixed(6)+"&geometryType=esriGeometryPoint&inSR=4326&outSR=4326"+
+    "&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true&geometryPrecision=6&f=geojson";
+  var pParcel = fetch(PARCELS+q).then(function(r){ if(!r.ok) throw new Error(); return r.json(); });
+  Promise.all([pParcel.catch(function(){return null;}), identify(DNR_MGD,ll), identify(DNR_PUB,ll)]).then(function(res){
+    if(seq!==tapSeq) return;
+    var gj = res[0], f = gj && gj.features && gj.features[0];
+    hl.clearLayers();
+    if(f) hl.addData(f);
+    renderSheet(f ? f.properties : null, res[1], res[2], ll, gj===null);
+  });
+});
+
+function publicHtml(mgd,pub){
+  var out = [], seen = {};
+  mgd.forEach(function(r){
+    var a = r.attributes||{}, name = a.PROP_NAME_LABEL || r.value; if(!name || seen[name]) return; seen[name]=1;
+    out.push('<div class="pub">'+esc(name)+'<small>Wisconsin DNR'+(String(a.TRANS_TYPE_CODE)==="2"?" easement. Access rules vary, check before entering.":" managed land. Check DNR rules for this property.")+'</small></div>');
+  });
+  pub.forEach(function(r){
+    var name = r.value || r.layerName; if(!name || seen[name]) return; seen[name]=1;
+    out.push('<div class="pub">'+esc(name)+'<small>'+esc(r.layerName)+'. Check the managing agency\'s rules.</small></div>');
+  });
+  return out.join("");
+}
+
+function renderSheet(p,mgd,pub,ll,failed){
+  var latlon = ll.lat.toFixed(5)+", "+ll.lng.toFixed(5);
+  var dir = "https://www.google.com/maps/dir/?api=1&destination="+ll.lat.toFixed(6)+","+ll.lng.toFixed(6);
+  var h = '<div class="grab"></div>';
+  if(!p){
+    h += '<div class="sh-head"><div class="owner"><div class="eyebrow">'+esc(latlon)+'</div><h3>'+(failed?"Couldn't reach the parcel service":"No parcel here")+'</h3>'+
+      '<div class="o2">'+(failed?"Check your signal and tap again.":"This spot isn't in the statewide parcel layer. A few small areas aren't mapped yet.")+'</div></div>'+
+      '<button class="x" id="xClose" aria-label="Close">×</button></div>';
+    h += publicHtml(mgd,pub);
+  } else {
+    var o1 = hiddenOwner(p.OWNERNME1) ? null : p.OWNERNME1;
+    h += '<div class="sh-head"><div class="owner"><div class="eyebrow">'+esc((p.CONAME||"")+" County"+(p.PLACENAME?" · "+p.PLACENAME:""))+'</div>'+
+      '<h3>'+(o1?esc(o1):"Owner not published")+'</h3>'+
+      (p.OWNERNME2 && !hiddenOwner(p.OWNERNME2) ? '<div class="o2">'+esc(p.OWNERNME2)+'</div>' : (o1?"":'<div class="o2">This county leaves owner names out of the state layer. Check the county land records site.</div>'))+
+      '</div><button class="x" id="xClose" aria-label="Close">×</button></div>';
+    var gis = num(p.GISACRES,1), asd = num(p.ASSDACRES,1), deed = num(p.DEEDACRES,1);
+    h += '<div class="stats">'+
+      '<div class="stat"><b>'+(gis||"—")+'</b><span>GIS acres</span></div>'+
+      '<div class="stat"><b>'+(deed||asd||"—")+'</b><span>'+(deed?"Deeded ac":"Assessed ac")+'</span></div>'+
+      '<div class="stat"><b>'+esc(money(p.CNTASSDVALUE)||"—")+'</b><span>Assessed</span></div></div>';
+    h += publicHtml(mgd,pub);
+    var rows = [
+      ["Parcel ID",p.PARCELID],["Tax parcel",p.TAXPARCELID && p.TAXPARCELID!==p.PARCELID ? p.TAXPARCELID : null],
+      ["Site address",p.SITEADRESS],["Mailing",p.PSTLADRESS],["Class",classText(p.PROPCLASS)],["Special class",classText(p.AUXCLASS)],
+      ["Land value",money(p.LNDVALUE)],["Net tax",money(p.NETPRPTA)],["Tax roll",p.TAXROLLYEAR],["School",p.SCHOOLDIST],["Tapped at",latlon]
+    ];
+    h += "<dl>"+rows.filter(function(r){return r[1]!=null && String(r[1]).trim()!=="";}).map(function(r){return "<dt>"+esc(r[0])+"</dt><dd>"+esc(r[1])+"</dd>";}).join("")+"</dl>";
+    h += '<div class="acts">'+(p.PARCELID?'<button class="act primary" id="aCopy" data-v="'+esc(p.PARCELID)+'">Copy parcel ID</button>':"")+
+      '<a class="act" href="'+esc(dir)+'" target="_blank" rel="noopener">Directions</a></div>';
+    h += '<p class="fine">From the Wisconsin Statewide Parcel Map. Lines are approximate and are not a survey. Confirm current ownership with the county.</p>';
+  }
+  openSheet(h);
+  var x = $("xClose"); if(x) x.onclick = closeSheet;
+  var c = $("aCopy"); if(c) c.onclick = function(){
+    var v = c.getAttribute("data-v");
+    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(v).then(function(){toast("Copied "+v);},function(){toast(v);}); } else toast(v);
+  };
+}
+function openSheet(h){ var s=$("sheet"); s.innerHTML=h; s.hidden=false; s.scrollTop=0; }
+function closeSheet(){ $("sheet").hidden=true; hl.clearLayers(); if(tapPin){map.removeLayer(tapPin);tapPin=null;} tapSeq++; }
+var tt; function toast(m){ var t=$("toast"); t.textContent=m; t.hidden=false; clearTimeout(tt); tt=setTimeout(function(){t.hidden=true;},2600); }
+
+// ---------- my location ----------
+var watchId = null, me = null, meAcc = null, firstFix = false;
+$("bLocate").onclick = function(){
+  var b = this;
+  if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; b.setAttribute("aria-pressed","false");
+    if(me){map.removeLayer(me);map.removeLayer(meAcc);me=meAcc=null;} return; }
+  if(!navigator.geolocation){ toast("This browser can't share your location."); return; }
+  b.setAttribute("aria-pressed","true"); firstFix = true; toast("Finding you");
+  watchId = navigator.geolocation.watchPosition(function(pos){
+    var ll = [pos.coords.latitude,pos.coords.longitude], acc = pos.coords.accuracy;
+    if(!me){
+      meAcc = L.circle(ll,{radius:acc,color:css("--you"),weight:1,fillColor:css("--you"),fillOpacity:.12,interactive:false}).addTo(map);
+      me = L.circleMarker(ll,{radius:8,color:"#fff",weight:3,fillColor:css("--you"),fillOpacity:1,interactive:false}).addTo(map);
+    } else { me.setLatLng(ll); meAcc.setLatLng(ll).setRadius(acc); }
+    if(firstFix){ firstFix=false; map.setView(ll,Math.max(map.getZoom(),16)); toast("Within about "+Math.round(acc*3.281)+" ft"); }
+  },function(err){
+    toast(err.code===1 ? "Location is blocked. Allow it for this site in your browser settings." : "Couldn't get your location. Try again in the open.");
+    if(watchId!==null) navigator.geolocation.clearWatch(watchId); watchId=null; b.setAttribute("aria-pressed","false");
+  },{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
+};
+
+// ---------- layers panel ----------
+$("bLayers").onclick = function(){ var p=$("panel"); p.hidden=!p.hidden; this.setAttribute("aria-pressed",String(!p.hidden)); };
+function setBase(k){
+  if(k===baseKey) return; map.removeLayer(bases[baseKey]); baseKey=k; bases[k].addTo(map); bases[k].bringToBack();
+  $("bmSat").setAttribute("aria-pressed",String(k==="sat")); $("bmTopo").setAttribute("aria-pressed",String(k==="topo"));
+  store("pm.base",k); restyle();
+}
+$("bmSat").onclick=function(){setBase("sat");}; $("bmTopo").onclick=function(){setBase("topo");};
+$("bmSat").setAttribute("aria-pressed",String(baseKey==="sat")); $("bmTopo").setAttribute("aria-pressed",String(baseKey==="topo"));
+$("tParcels").checked = parcelsOn; $("tPublic").checked = pubOn;
+$("tParcels").onchange=function(){ parcelsOn=this.checked; store("pm.parcels",parcelsOn?"1":"0");
+  if(parcelsOn){ map.addLayer(parcelGroup); loadParcels(); } else { if(ctrl) ctrl.abort(); map.removeLayer(parcelGroup); setStatus(""); } };
+$("tPublic").onchange=function(){ pubOn=this.checked; store("pm.pub",pubOn?"1":"0"); if(pubOn) drawPublic(); else clearPublic(); };
+if(!parcelsOn) map.removeLayer(parcelGroup);
+restyle();
+
+// ---------- wire up ----------
+map.on("moveend",function(){
+  var c = map.getCenter(); store("pm.view",JSON.stringify({lat:+c.lat.toFixed(5),lng:+c.lng.toFixed(5),z:map.getZoom()}));
+  clearTimeout(timer); timer = setTimeout(function(){ loadParcels(); drawPublic(); },250);
+});
+map.on("zoomstart",function(){ if(ctrl) ctrl.abort(); });
+if(window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",restyle);
+loadParcels(); drawPublic();
+})();
+</script>
+</body>
+</html>
